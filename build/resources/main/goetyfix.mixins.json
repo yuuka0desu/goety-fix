@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "package": "com.example.goetyfix.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "minVersion": "0.8",
+  "refmap": "goetyfix.refmap.json",
+  "mixins": [
+    "ApostleTeleportMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

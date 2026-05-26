@@ -1,0 +1,7 @@
+Manifest-Version: 1.0
+Specification-Title: goetyfix
+Specification-Version: 1
+Implementation-Title: goety-apostle-fix
+Implementation-Version: 1.0.0
+MixinConfigs: goetyfix.mixins.json
+
