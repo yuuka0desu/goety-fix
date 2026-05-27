@@ -3,8 +3,10 @@ package com.example.goetyfix;
 import com.Polarice3.Goety.common.entities.ally.Summoned;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
@@ -37,6 +39,7 @@ public class PlayerLeakFixer {
     // Cached reflection fields (resolved once, reused)
     private static Field lastMoneyAmountsField;
     private static Field enhancedEntitiesField;
+    private static Field entityUpgradeDataField;
     private static boolean reflectionInitialized = false;
 
     /**
@@ -74,6 +77,7 @@ public class PlayerLeakFixer {
 
     /**
      * When a player logs out, clear all Summoned entity fields that reference them.
+     * Also clear vanilla Mob target and LivingEntity.lastHurtByPlayer references.
      * This ensures the ServerPlayer object can be garbage collected.
      */
     @SubscribeEvent(priority = EventPriority.LOWEST)
@@ -92,6 +96,20 @@ public class PlayerLeakFixer {
                     }
                     if (summoned.getPriorityTarget() == player) {
                         summoned.setPriorityTarget(null);
+                        cleared++;
+                    }
+                }
+                // Clear vanilla Mob.target if it references the logging-out player
+                if (entity instanceof Mob mob) {
+                    if (mob.getTarget() == player) {
+                        mob.setTarget(null);
+                        cleared++;
+                    }
+                }
+                // Clear LivingEntity.lastHurtByPlayer (vanilla field that holds Player reference)
+                if (entity instanceof LivingEntity living) {
+                    if (living.getLastHurtByMob() == player) {
+                        living.setLastHurtByMob(null);
                         cleared++;
                     }
                 }
@@ -180,6 +198,25 @@ public class PlayerLeakFixer {
                 // Ignore
             }
         }
+
+        // Clean ApostleUpgradeManager.entityUpgradeData (ConcurrentHashMap<LivingEntity, ...>)
+        if (entityUpgradeDataField != null) {
+            try {
+                Map<LivingEntity, ?> upgradeMap = (Map<LivingEntity, ?>) entityUpgradeDataField.get(null);
+                if (upgradeMap != null && !upgradeMap.isEmpty()) {
+                    int before = upgradeMap.size();
+                    upgradeMap.entrySet().removeIf(entry ->
+                            entry.getKey() == null || entry.getKey().isRemoved()
+                    );
+                    int removed = before - upgradeMap.size();
+                    if (removed > 0) {
+                        LOGGER.debug("Cleaned {} stale entries from ApostleUpgradeManager.entityUpgradeData", removed);
+                    }
+                }
+            } catch (Exception e) {
+                // Ignore
+            }
+        }
     }
 
     private static void initReflection() {
@@ -204,6 +241,16 @@ public class PlayerLeakFixer {
         } catch (Exception e) {
             LOGGER.warn("Could not access EnhancedEntityEvents.enhancedEntities: {}", e.getMessage());
             enhancedEntitiesField = null;
+        }
+
+        try {
+            Class<?> upgradeManagerClass = Class.forName(
+                    "com.k1sak1.goetyawaken.common.upgrades.ApostleUpgradeManager");
+            entityUpgradeDataField = upgradeManagerClass.getDeclaredField("entityUpgradeData");
+            entityUpgradeDataField.setAccessible(true);
+        } catch (Exception e) {
+            LOGGER.warn("Could not access ApostleUpgradeManager.entityUpgradeData: {}", e.getMessage());
+            entityUpgradeDataField = null;
         }
     }
 }
