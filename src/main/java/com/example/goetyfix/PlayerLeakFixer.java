@@ -40,6 +40,8 @@ public class PlayerLeakFixer {
     private static Field lastMoneyAmountsField;
     private static Field enhancedEntitiesField;
     private static Field entityUpgradeDataField;
+    private static Field killDataAttackingPlayerField;
+    private static Class<?> animationSummonClass;
     private static boolean reflectionInitialized = false;
 
     /**
@@ -53,6 +55,7 @@ public class PlayerLeakFixer {
         MinecraftServer server = newPlayer.getServer();
         if (server == null) return;
 
+        initReflection();
         int updated = 0;
         for (ServerLevel level : server.getAllLevels()) {
             for (Entity entity : level.getAllEntities()) {
@@ -66,6 +69,8 @@ public class PlayerLeakFixer {
                         updated++;
                     }
                 }
+                // Clear goety_cataclysm AnimationSummon.killDataAttackingPlayer
+                updated += clearKillDataAttackingPlayer(entity, oldPlayer);
             }
         }
 
@@ -86,6 +91,7 @@ public class PlayerLeakFixer {
         MinecraftServer server = player.getServer();
         if (server == null) return;
 
+        initReflection();
         int cleared = 0;
         for (ServerLevel level : server.getAllLevels()) {
             for (Entity entity : level.getAllEntities()) {
@@ -106,13 +112,17 @@ public class PlayerLeakFixer {
                         cleared++;
                     }
                 }
-                // Clear LivingEntity.lastHurtByPlayer (vanilla field that holds Player reference)
+                // Clear LivingEntity.lastHurtByMob (vanilla field that holds Player reference)
                 if (entity instanceof LivingEntity living) {
                     if (living.getLastHurtByMob() == player) {
                         living.setLastHurtByMob(null);
                         cleared++;
                     }
                 }
+                // Clear goety_cataclysm AnimationSummon.killDataAttackingPlayer
+                cleared += clearKillDataAttackingPlayer(entity, player);
+                // Clear caster/owner fields on projectiles via reflection
+                cleared += clearCasterField(entity, player);
             }
         }
 
@@ -139,11 +149,13 @@ public class PlayerLeakFixer {
     }
 
     /**
-     * Scan all Summoned entities and clear commandPosEntity if it references a removed entity.
+     * Scan all Summoned entities and clear stale references to removed entities.
+     * Also handles goety_cataclysm AnimationSummon.killDataAttackingPlayer.
      */
     private static void cleanupStaleReferences(MinecraftServer server) {
         if (server == null) return;
 
+        initReflection();
         for (ServerLevel level : server.getAllLevels()) {
             for (Entity entity : level.getAllEntities()) {
                 if (entity instanceof Summoned summoned) {
@@ -156,8 +168,102 @@ public class PlayerLeakFixer {
                         summoned.setPriorityTarget(null);
                     }
                 }
+                // Clear killDataAttackingPlayer if the player is removed
+                clearKillDataIfRemoved(entity);
+                // Clear caster/owner fields if the referenced entity is removed
+                clearCasterIfRemoved(entity);
             }
         }
+    }
+
+    /**
+     * Clear AnimationSummon.killDataAttackingPlayer if it matches the given player.
+     */
+    private static int clearKillDataAttackingPlayer(Entity entity, Player player) {
+        if (killDataAttackingPlayerField == null || animationSummonClass == null) return 0;
+        if (!animationSummonClass.isInstance(entity)) return 0;
+        try {
+            Object value = killDataAttackingPlayerField.get(entity);
+            if (value == player) {
+                killDataAttackingPlayerField.set(entity, null);
+                return 1;
+            }
+        } catch (Exception ignored) {}
+        return 0;
+    }
+
+    /**
+     * Clear AnimationSummon.killDataAttackingPlayer if the referenced player is removed.
+     */
+    private static void clearKillDataIfRemoved(Entity entity) {
+        if (killDataAttackingPlayerField == null || animationSummonClass == null) return;
+        if (!animationSummonClass.isInstance(entity)) return;
+        try {
+            Object value = killDataAttackingPlayerField.get(entity);
+            if (value instanceof Player p && p.isRemoved()) {
+                killDataAttackingPlayerField.set(entity, null);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * Clear caster/owner LivingEntity fields on projectile entities if they match the player.
+     * Uses reflection to handle various goety_cataclysm projectile classes.
+     */
+    private static int clearCasterField(Entity entity, Player player) {
+        int cleared = 0;
+        Class<?> clazz = entity.getClass();
+        // Try common field names used by goety_cataclysm projectiles
+        for (String fieldName : new String[]{"caster", "owner", "finalTarget"}) {
+            try {
+                Field field = findFieldInHierarchy(clazz, fieldName);
+                if (field == null) continue;
+                field.setAccessible(true);
+                Object value = field.get(entity);
+                if (value == player) {
+                    field.set(entity, null);
+                    cleared++;
+                }
+            } catch (Exception ignored) {}
+        }
+        return cleared;
+    }
+
+    /**
+     * Clear caster/owner fields on projectile entities if the referenced entity is removed.
+     */
+    private static void clearCasterIfRemoved(Entity entity) {
+        if (entity instanceof Summoned) return; // Already handled above
+        Class<?> clazz = entity.getClass();
+        String pkg = clazz.getName();
+        // Only process goety_cataclysm projectile/util entities
+        if (!pkg.contains("goety_cataclysm")) return;
+        for (String fieldName : new String[]{"caster", "owner", "finalTarget"}) {
+            try {
+                Field field = findFieldInHierarchy(clazz, fieldName);
+                if (field == null) continue;
+                field.setAccessible(true);
+                Object value = field.get(entity);
+                if (value instanceof LivingEntity le && le.isRemoved()) {
+                    field.set(entity, null);
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /**
+     * Find a field by name in the class hierarchy.
+     */
+    private static Field findFieldInHierarchy(Class<?> clazz, String fieldName) {
+        Class<?> current = clazz;
+        while (current != null && current != Object.class) {
+            try {
+                return current.getDeclaredField(fieldName);
+            } catch (NoSuchFieldException e) {
+                current = current.getSuperclass();
+            }
+        }
+        return null;
     }
 
     /**
@@ -251,6 +357,18 @@ public class PlayerLeakFixer {
         } catch (Exception e) {
             LOGGER.warn("Could not access ApostleUpgradeManager.entityUpgradeData: {}", e.getMessage());
             entityUpgradeDataField = null;
+        }
+
+        // goety_cataclysm: AnimationSummon.killDataAttackingPlayer
+        try {
+            animationSummonClass = Class.forName(
+                    "com.Polarice3.goety_cataclysm.common.entities.ally.AnimationSummon");
+            killDataAttackingPlayerField = animationSummonClass.getDeclaredField("killDataAttackingPlayer");
+            killDataAttackingPlayerField.setAccessible(true);
+        } catch (Exception e) {
+            LOGGER.info("goety_cataclysm not found or AnimationSummon.killDataAttackingPlayer not accessible (optional)");
+            animationSummonClass = null;
+            killDataAttackingPlayerField = null;
         }
     }
 }
