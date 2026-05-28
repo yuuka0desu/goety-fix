@@ -47,6 +47,7 @@ public class PlayerLeakFixer {
     /**
      * When a player respawns or returns from the End, the old ServerPlayer is replaced.
      * Update all Summoned entities that reference the old player to point to the new one.
+     * Also invalidate the old player's capabilities to break reference chains.
      */
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onPlayerClone(PlayerEvent.Clone event) {
@@ -72,6 +73,15 @@ public class PlayerLeakFixer {
                 // Clear goety_cataclysm AnimationSummon.killDataAttackingPlayer
                 updated += clearKillDataAttackingPlayer(entity, oldPlayer);
             }
+        }
+
+        // Critical: Invalidate old player's capabilities to break reference chains.
+        // Goety's onPlayerClone calls reviveCaps() but never invalidateCaps(),
+        // leaving the old player's capability objects (SEImp, LichImp, etc.) reachable.
+        try {
+            oldPlayer.invalidateCaps();
+        } catch (Exception e) {
+            LOGGER.debug("Could not invalidate old player caps: {}", e.getMessage());
         }
 
         if (updated > 0) {
