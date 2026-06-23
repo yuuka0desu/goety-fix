@@ -26,14 +26,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(targets = "com.k1sak1.goetyawaken.common.entities.projectiles.TrackingFireball", remap = false)
 public abstract class MixinTrackingFireball {
 
-    @Inject(method = "onHitEntity", at = @At("HEAD"), cancellable = true, remap = true, require = 0, expect = 0)
+    // m_5790_ is onHitEntity(EntityHitResult) — stored as SRG name in GoetyAwaken's bytecode.
+    // remap = false because the target class itself uses SRG names (compiled with remap=false).
+    @Inject(
+        method = "m_5790_(Lnet/minecraft/world/phys/EntityHitResult;)V",
+        at = @At("HEAD"), cancellable = true, remap = false, require = 0, expect = 0
+    )
     private void goetyfix$guardNonLivingHit(EntityHitResult result, CallbackInfo ci) {
         try {
             if (result == null || !(result.getEntity() instanceof LivingEntity)) {
                 ci.cancel();
             }
         } catch (Throwable ignored) {
-            // Never let the guard itself crash the tick
             ci.cancel();
         }
     }
