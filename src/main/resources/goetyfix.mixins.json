@@ -6,7 +6,8 @@
   "refmap": "goetyfix.refmap.json",
   "mixins": [
     "ApostleTeleportMixin",
-    "MixinTrackingFireball"
+    "MixinTrackingFireball",
+    "MixinProjectileHitGuard"
   ],
   "injectors": {
     "defaultRequire": 1
