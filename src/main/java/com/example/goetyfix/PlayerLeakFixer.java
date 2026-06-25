@@ -6,7 +6,10 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.EntityHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraftforge.event.TickEvent;
+import net.minecraftforge.event.entity.ProjectileImpactEvent;
 import net.minecraftforge.event.entity.player.PlayerEvent;
 import net.minecraftforge.eventbus.api.EventPriority;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -140,6 +143,30 @@ public class PlayerLeakFixer {
 
         try { cleanupStaticMaps(); } catch (Exception ignored) {}
         try { cleanupStaleReferences(event.getServer()); } catch (Exception ignored) {}
+    }
+
+    /**
+     * Prevent GoetyAwaken TrackingFireball ClassCastException crash.
+     * When a TrackingFireball hits a non-LivingEntity (e.g. another projectile),
+     * its onHitEntity method does an unchecked cast to LivingEntity, causing a crash.
+     * This event fires BEFORE onHitEntity is called, allowing us to cancel the hit.
+     *
+     * Uses Forge's ProjectileImpactEvent which fires reliably regardless of
+     * obfuscation/remap state — bypasses all Mixin injection issues.
+     */
+    @SubscribeEvent(priority = EventPriority.HIGHEST)
+    public static void onProjectileImpact(ProjectileImpactEvent event) {
+        try {
+            String className = event.getProjectile().getClass().getName();
+            if (!className.contains("TrackingFireball")) return;
+
+            HitResult hit = event.getRayTraceResult();
+            if (hit instanceof EntityHitResult ehr) {
+                if (!(ehr.getEntity() instanceof LivingEntity)) {
+                    event.setCanceled(true);
+                }
+            }
+        } catch (Exception ignored) {}
     }
 
     // ======================== Summoned entity helpers (reflection) ========================
